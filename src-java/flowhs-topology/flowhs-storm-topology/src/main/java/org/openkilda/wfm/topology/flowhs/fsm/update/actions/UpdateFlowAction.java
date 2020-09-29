@@ -201,6 +201,7 @@ public class UpdateFlowAction extends NbTrackableAction<FlowUpdateFsm, State, Ev
                 targetFlow.getPathComputationStrategy());
 
         updateEndpointOnly &= Objects.equal(originalGroupId, targetGroupId);
+        updateEndpointOnly |= !Objects.equal(originalFlow.getLoopSwitchId(), targetFlow.getLoopSwitchId());
 
         // TODO(tdurakov): check connected devices as well
         boolean srcEndpointChanged = originalFlow.getSrcPort() != targetFlow.getSrcPort();
