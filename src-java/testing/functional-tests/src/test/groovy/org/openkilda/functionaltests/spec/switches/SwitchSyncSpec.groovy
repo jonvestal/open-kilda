@@ -103,11 +103,13 @@ class SwitchSyncSpec extends BaseSpecification {
             def validationResultsMap = involvedSwitches.collectEntries { [it.dpId, northbound.validateSwitch(it.dpId)] }
             involvedSwitches[1..-2].each {
                 assert validationResultsMap[it.dpId].rules.missing.size() == 2 + it.defaultCookies.size()
+                assert validationResultsMap[it.dpId].rules.missingHex.size() == 2 + it.defaultCookies.size()
                 assert validationResultsMap[it.dpId].meters.missing.meterId.sort() == it.defaultMeters.sort()
             }
             [switchPair.src, switchPair.dst].each {
                 def amountOfSharedRules = northbound.getSwitchProperties(it.dpId).multiTable ? 1 : 0
                 assert validationResultsMap[it.dpId].rules.missing.size() == 2 + it.defaultCookies.size() + amountOfSharedRules
+                assert validationResultsMap[it.dpId].rules.missingHex.size() == 2 + it.defaultCookies.size() + amountOfSharedRules
                 assert validationResultsMap[it.dpId].meters.missing.size() == 1 + it.defaultMeters.size()
             }
         }
@@ -195,7 +197,10 @@ class SwitchSyncSpec extends BaseSpecification {
 
         Wrappers.wait(RULES_INSTALLATION_TIME) {
             def validationResultsMap = involvedSwitches.collectEntries { [it.dpId, northbound.validateSwitch(it.dpId)] }
-            involvedSwitches.each { assert validationResultsMap[it.dpId].rules.excess.size() == 1 }
+            involvedSwitches.each {
+                assert validationResultsMap[it.dpId].rules.excess.size() == 1
+                assert validationResultsMap[it.dpId].rules.excessHex.size() == 1
+            }
             [srcSwitch, dstSwitch].each { assert validationResultsMap[it.dpId].meters.excess.size() == 1 }
         }
 
@@ -223,6 +228,7 @@ class SwitchSyncSpec extends BaseSpecification {
             involvedSwitches.each {
                 def validationResult = northbound.validateSwitch(it.dpId)
                 assert validationResult.rules.excess.size() == 0
+                assert validationResult.rules.excessHex.size() == 0
                 if(!it.dpId.description.contains("OF_12")) {
                     assert validationResult.meters.missing.size() == 0
                 }
