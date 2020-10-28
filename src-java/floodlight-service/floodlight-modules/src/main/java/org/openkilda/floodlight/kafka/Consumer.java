@@ -19,6 +19,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
+import org.openkilda.bluegreen.Signal;
 import org.openkilda.floodlight.kafka.RecordHandler.Factory;
 import org.openkilda.floodlight.service.kafka.KafkaConsumerSetup;
 import org.openkilda.floodlight.service.kafka.KafkaUtilityService;
@@ -35,9 +36,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 
 public class Consumer implements Runnable {
     private static final Logger logger = LoggerFactory.getLogger(Consumer.class);
@@ -50,6 +54,9 @@ public class Consumer implements Runnable {
 
     private final KafkaUtilityService kafkaUtilityService;
     private final ISwitchManager switchManager; // HACK alert.. adding to facilitate safeSwitchTick()
+
+    private final ZooKeeperHandler zooKeeperHandler;
+    private final Set<Future<?>> tasks = new HashSet<>();
 
     public Consumer(FloodlightModuleContext moduleContext, ExecutorService handlersPool,
                     KafkaConsumerSetup kafkaSetup, Factory handlerFactory,
@@ -65,10 +72,15 @@ public class Consumer implements Runnable {
 
         kafkaUtilityService = moduleContext.getServiceImpl(KafkaUtilityService.class);
         switchManager = moduleContext.getServiceImpl(ISwitchManager.class);
+
+        zooKeeperHandler = new ZooKeeperHandler(handlerFactory.getContext().getRegion(),
+                "floodlight", 1, "zookeeper.pendev:2181/kilda");
     }
 
     @Override
     public void run() {
+        handlersPool.execute(zooKeeperHandler);
+        
         while (!Thread.currentThread().isInterrupted()) {
             /*
              * Ensure we try to keep processing messages. It is possible that the consumer needs
@@ -88,6 +100,16 @@ public class Consumer implements Runnable {
 
                 while (true) {
                     try {
+                        if (!tasks.isEmpty()) {
+                            for (Future<?> task: tasks) {
+                                if (task.get() == null) {
+                                    tasks.remove(task);
+                                }
+                            }
+                        } else {
+                            zooKeeperHandler.updateZkStateIfShutdown();
+                        }
+
                         ConsumerRecords<String, String> batch = consumer.poll(pollTimeout);
                         if (! batch.isEmpty()) {
                             handle(batch, offsetRegistry);
@@ -120,8 +142,11 @@ public class Consumer implements Runnable {
     }
 
     private void handle(ConsumerRecord<String, String> record) {
+        if (!zooKeeperHandler.getEvent().getSignal().equals(Signal.START)) {
+            return;
+        }
         logger.trace("received message: {} - key:{}, value:{}", record.offset(), record.key(), record.value());
-        handlersPool.execute(handlerFactory.produce(record));
+        tasks.add(handlersPool.submit(handlerFactory.produce(record)));
     }
 
     private void tick() {
