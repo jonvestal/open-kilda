@@ -15,6 +15,8 @@
 
 package org.openkilda.wfm.topology.nbworker.bolts;
 
+import org.openkilda.bluegreen.LifecycleEvent;
+import org.openkilda.bluegreen.Signal;
 import org.openkilda.messaging.Message;
 import org.openkilda.messaging.command.CommandData;
 import org.openkilda.messaging.error.ErrorData;
@@ -25,6 +27,9 @@ import org.openkilda.wfm.error.PipelineException;
 import org.openkilda.wfm.share.flow.resources.FlowResourcesConfig;
 import org.openkilda.wfm.share.hubandspoke.HubBolt;
 import org.openkilda.wfm.share.utils.KeyProvider;
+import org.openkilda.wfm.share.zk.ZkStreams;
+import org.openkilda.wfm.share.zk.ZooKeeperBolt;
+import org.openkilda.wfm.share.zk.ZooKeeperSpout;
 import org.openkilda.wfm.topology.nbworker.StreamType;
 import org.openkilda.wfm.topology.nbworker.services.FlowValidationHubService;
 import org.openkilda.wfm.topology.utils.MessageKafkaTranslator;
@@ -48,6 +53,8 @@ public class FlowValidationHubBolt extends HubBolt {
     private transient FlowValidationHubService service;
     private long flowMeterMinBurstSizeInKbits;
     private double flowMeterBurstCoefficient;
+    private LifecycleEvent differedShutdownEvent;
+
 
     public FlowValidationHubBolt(Config config, PersistenceManager persistenceManager,
                                  FlowResourcesConfig flowResourcesConfig,
@@ -62,7 +69,25 @@ public class FlowValidationHubBolt extends HubBolt {
     @Override
     public void prepare(Map stormConf, TopologyContext context, OutputCollector collector) {
         super.prepare(stormConf, context, collector);
-        service = new FlowValidationHubService(persistenceManager, flowResourcesConfig);
+        service = new FlowValidationHubService(persistenceManager, flowResourcesConfig,
+                new FlowValidationHubCarrierImpl(null));
+    }
+
+    @Override
+    protected void onLifeCycleEvent(Tuple input) {
+        LifecycleEvent event = (LifecycleEvent) input.getValueByField(ZooKeeperSpout.FIELD_ID_LIFECYCLE_EVENT);
+        if (event.getSignal().equals(Signal.SHUTDOWN)) {
+            if (service.deactivate()) {
+                emit(ZkStreams.ZK.toString(), input, new Values(event, getCommandContext()));
+            } else {
+                differedShutdownEvent = event;
+            }
+        } else if (event.getSignal().equals(Signal.START)) {
+            service.activate();
+            emit(ZkStreams.ZK.toString(), new Values(event, getCommandContext()));
+        } else {
+            log.info("Received signal info %s", event.getSignal());
+        }
     }
 
     @Override
@@ -96,6 +121,8 @@ public class FlowValidationHubBolt extends HubBolt {
         declarer.declareStream(StreamType.FLOW_VALIDATION_WORKER.toString(), MessageKafkaTranslator.STREAM_FIELDS);
         declarer.declareStream(StreamType.ERROR.toString(),
                 new Fields(MessageEncoder.FIELD_ID_PAYLOAD, MessageEncoder.FIELD_ID_CONTEXT));
+        declarer.declareStream(StreamType.ZK.toString(),
+                new Fields(ZooKeeperBolt.FIELD_ID_STATE, ZooKeeperBolt.FIELD_ID_CONTEXT));
         declarer.declare(new Fields(ResponseSplitterBolt.FIELD_ID_RESPONSE,
                 ResponseSplitterBolt.FIELD_ID_CONTEXT));
     }
@@ -110,7 +137,7 @@ public class FlowValidationHubBolt extends HubBolt {
         @Override
         public void sendCommandToSpeakerWorker(String key, CommandData commandData) {
             emitWithContext(StreamType.FLOW_VALIDATION_WORKER.toString(), tuple,
-                        new Values(KeyProvider.generateChainedKey(key), commandData));
+                    new Values(KeyProvider.generateChainedKey(key), commandData));
         }
 
         @Override
@@ -126,6 +153,13 @@ public class FlowValidationHubBolt extends HubBolt {
         @Override
         public void endProcessing(String key) {
             cancelCallback(key);
+        }
+
+        @Override
+        public void sendInactive() {
+            getOutput().emit(StreamType.ZK.toString(), new Values(differedShutdownEvent, getCommandContext()));
+            differedShutdownEvent = null;
+
         }
 
         @Override
