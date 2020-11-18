@@ -24,6 +24,9 @@ import org.openkilda.wfm.LaunchEnvironment;
 import org.openkilda.wfm.error.ConfigurationException;
 import org.openkilda.wfm.kafka.AbstractMessageSerializer;
 import org.openkilda.wfm.kafka.MessageSerializer;
+import org.openkilda.wfm.share.zk.ZkStreams;
+import org.openkilda.wfm.share.zk.ZooKeeperBolt;
+import org.openkilda.wfm.share.zk.ZooKeeperSpout;
 import org.openkilda.wfm.topology.AbstractTopology;
 import org.openkilda.wfm.topology.floodlightrouter.bolts.ControllerToSpeakerProxyBolt;
 import org.openkilda.wfm.topology.floodlightrouter.bolts.ControllerToSpeakerSharedProxyBolt;
@@ -79,6 +82,8 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
         int parallelism = topologyConfig.getParallelism();
 
         TopologyOutput output = kafkaOutput(builder, newParallelism);
+        zkSpout(builder);
+        zkBolt(builder);
 
         speakerToNetwork(builder, parallelism, newParallelism, output);
         networkToSpeaker(builder, parallelism, newParallelism, output);
@@ -106,6 +111,36 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
         return builder.createTopology();
     }
 
+    private void zkSpout(TopologyBuilder topology) {
+        String zkString = "zookeeper.pendev:2181/kilda";
+
+        ZooKeeperSpout zooKeeperSpout = new ZooKeeperSpout("green", "fl_router", 1,
+                zkString);
+        topology.setSpout(ComponentType.ZK_SPOUT, zooKeeperSpout, 1);
+    }
+
+    private void zkBolt(TopologyBuilder topology) {
+        String zkString = "zookeeper.pendev:2181/kilda";
+        ZooKeeperBolt zooKeeperBolt = new ZooKeeperBolt("green", "fl_router", 1, zkString);
+        topology.setBolt(ComponentType.ZK_BOLT, zooKeeperBolt, 1)
+                .allGrouping(SpeakerToNetworkProxyBolt.BOLT_ID, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.SPEAKER_DISCO_REQUEST_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.KILDA_FLOW_HS_REPLY_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.SPEAKER_FLOW_REQUEST_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.KILDA_PING_REPLY_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(Stream.SPEAKER_PING, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.KILDA_STATS_REPLY_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.KILDA_ISL_LATENCY_REPLY_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.KILDA_CONNECTED_DEVICES_REPLY_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.KILDA_SWITCH_MANAGER_REPLY_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.NORTHBOUND_REPLY_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.KILDA_NB_WORKER_REPLY_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(ComponentType.SPEAKER_REQUEST_BOLT, ZkStreams.ZK.toString())
+                .allGrouping(RegionTrackerBolt.BOLT_ID, ZkStreams.ZK.toString())
+                .allGrouping(SwitchMonitorBolt.BOLT_ID, ZkStreams.ZK.toString());
+    }
+
+    // Done
     private void speakerToNetwork(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         KafkaSpout<String, Message> spout = buildKafkaSpout(
@@ -116,12 +151,15 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 kafkaTopics.getTopoDiscoTopic(), Duration.ofSeconds(topologyConfig.getSwitchMappingRemoveDelay()));
         topology.setBolt(SpeakerToNetworkProxyBolt.BOLT_ID, proxy, parallelism)
                 .allGrouping(SwitchMonitorBolt.BOLT_ID, SwitchMonitorBolt.STREAM_REGION_MAPPING_ID)
-                .shuffleGrouping(ComponentType.KILDA_TOPO_DISCO_KAFKA_SPOUT);
+                .shuffleGrouping(ComponentType.KILDA_TOPO_DISCO_KAFKA_SPOUT)
+                .allGrouping(ComponentType.ZK_SPOUT);
+
 
         output.getKafkaGenericOutput()
                 .shuffleGrouping(SpeakerToNetworkProxyBolt.BOLT_ID);
     }
 
+    // Done
     private void networkToSpeaker(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         declareControllerToSpeakerProxy(
@@ -130,6 +168,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaGenericOutput(), spoutParallelism, parallelism);
     }
 
+    // Done
     private void speakerToFlowHs(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         KafkaSpout<String, AbstractMessage> spout = buildKafkaSpoutForAbstractMessage(
@@ -142,6 +181,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaHsOutput(), parallelism);
     }
 
+    // Done
     private void flowHsToSpeaker(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         KafkaSpout<String, AbstractMessage> spout = buildKafkaSpoutForAbstractMessage(
@@ -154,6 +194,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaHsOutput(), parallelism);
     }
 
+    // Done
     private void speakerToPing(TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         declareSpeakerToControllerProxy(
                 topology, kafkaTopics.getPingRegionTopic(), kafkaTopics.getPingTopic(),
@@ -161,6 +202,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaGenericOutput(), spoutParallelism, parallelism);
     }
 
+    // Done
     private void pingToSpeaker(TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         declareControllerToSpeakerProxy(
                 topology, kafkaTopics.getSpeakerFlowPingRegionTopic(), kafkaTopics.getSpeakerFlowPingTopic(),
@@ -168,6 +210,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaGenericOutput(), spoutParallelism, parallelism);
     }
 
+    // Done
     private void speakerToStats(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         declareSpeakerToControllerProxy(
@@ -176,6 +219,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaGenericOutput(), spoutParallelism, parallelism);
     }
 
+    // Done
     private void speakerToIslLatency(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         declareSpeakerToControllerProxy(
@@ -184,6 +228,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaGenericOutput(), spoutParallelism, parallelism);
     }
 
+    // Done
     private void speakerToConnectedDevices(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         declareSpeakerToControllerProxy(
@@ -192,6 +237,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaGenericOutput(), spoutParallelism, parallelism);
     }
 
+    // Done
     private void speakerToSwitchManager(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         declareSpeakerToControllerProxy(
@@ -200,6 +246,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaGenericOutput(), spoutParallelism, parallelism);
     }
 
+    // Done
     private void speakerToNorthbound(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         declareSpeakerToControllerProxy(
@@ -208,6 +255,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaGenericOutput(), spoutParallelism, parallelism);
     }
 
+    // Done
     private void speakerToNbWorker(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         declareSpeakerToControllerProxy(
@@ -216,6 +264,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 output.getKafkaGenericOutput(), spoutParallelism, parallelism);
     }
 
+    // Done
     private void controllerToSpeaker(
             TopologyBuilder topology, int spoutParallelism, int parallelism, TopologyOutput output) {
         BoltDeclarer kafkaProducer = output.getKafkaGenericOutput();
@@ -237,6 +286,7 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 .shuffleGrouping(ComponentType.SPEAKER_REQUEST_BOLT, Stream.NORTHBOUND_REPLY);
     }
 
+    // Done
     private void regionTracker(TopologyBuilder topology, TopologyOutput output) {
         RegionTrackerBolt bolt = new RegionTrackerBolt(
                 kafkaTopics.getSpeakerDiscoRegionTopic(), persistenceManager, regions,
@@ -250,6 +300,8 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 .shuffleGrouping(RegionTrackerBolt.BOLT_ID, RegionTrackerBolt.STREAM_SPEAKER_ID);
     }
 
+
+    // Done
     private void switchMonitor(TopologyBuilder topology, TopologyOutput output, int parallelism) {
         Fields switchIdGrouping = new Fields(SpeakerToNetworkProxyBolt.FIELD_ID_SWITCH_ID);
 
@@ -298,7 +350,8 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 controllerTopic, Duration.ofSeconds(topologyConfig.getSwitchMappingRemoveDelay()));
         topology.setBolt(proxyBoltId, proxy, parallelism)
                 .allGrouping(SwitchMonitorBolt.BOLT_ID, SwitchMonitorBolt.STREAM_REGION_MAPPING_ID)
-                .shuffleGrouping(spoutId);
+                .shuffleGrouping(spoutId)
+                .allGrouping(ComponentType.ZK_SPOUT);
 
         output.shuffleGrouping(proxyBoltId);
     }
@@ -320,7 +373,9 @@ public class FloodlightRouterTopology extends AbstractTopology<FloodlightRouterT
                 speakerTopicsSeed, regions, Duration.ofSeconds(topologyConfig.getSwitchMappingRemoveDelay()));
         topology.setBolt(proxyBoltId, proxy, parallelism)
                 .shuffleGrouping(spoutId)
-                .allGrouping(SwitchMonitorBolt.BOLT_ID, SwitchMonitorBolt.STREAM_REGION_MAPPING_ID);
+                .allGrouping(SwitchMonitorBolt.BOLT_ID, SwitchMonitorBolt.STREAM_REGION_MAPPING_ID)
+                .allGrouping(ComponentType.ZK_SPOUT);
+
 
         output.shuffleGrouping(proxyBoltId);
     }

@@ -48,6 +48,9 @@ public final class ComponentType {
     public static final String STATS_STATS_REQUEST_BOLT = "STATS_STATS_REQUEST_BOLT";
     public static final String FL_STATS_SWITCHES_SPOUT = "FL_STATS_SWITCHES_SPOUT";
     public static final String FL_STATS_SWITCHES_REPLY_BOLT = "FL_STATS_SWITCHES_REPLY_BOLT";
+    public static final String ZK_SPOUT = "ZK_SPOUT";
+    public static final String ZK_BOLT = "ZK_BOLT";
+
 
     public static final String SWITCH_MONITOR = "switch-monitor";
 
