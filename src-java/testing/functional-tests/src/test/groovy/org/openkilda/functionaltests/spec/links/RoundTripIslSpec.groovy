@@ -20,6 +20,7 @@ import org.openkilda.messaging.info.event.IslChangeType
 import org.openkilda.messaging.info.event.SwitchChangeType
 import org.openkilda.model.IslStatus
 import org.openkilda.model.SwitchFeature
+import org.openkilda.northbound.dto.v2.switches.PortPropertiesDto
 import org.openkilda.testing.model.topology.TopologyDefinition.Isl
 
 import spock.lang.See
@@ -225,6 +226,91 @@ round trip latency rule is removed on the dst switch"() {
                 }.size() == topology.islsForActiveSwitches.size() * 2
                 assert northbound.validateSwitch(dstSw.dpId).rules.missing.empty
             }
+        }
+    }
+
+    @Tidy
+    @Tags([SMOKE_SWITCHES])
+    def "A round trip latency ISL goes down when portDiscovery property is disabled on the src/dst ports"() {
+        given: "A round trip latency ISL"
+        Isl roundTripIsl = topology.activeSwitches.find { sw ->
+            if (sw.features.contains(SwitchFeature.NOVIFLOW_COPY_FIELD)) {
+                topology.getRelatedIsls(sw).find {
+                    it.dstSwitch.features.contains(SwitchFeature.NOVIFLOW_COPY_FIELD)
+                }
+            }
+        } ?: assumeTrue("Wasn't able to find a suitable link", false)
+        def dstSwToDeactivate = roundTripIsl.dstSwitch
+
+        when: "Disable portDiscovery on the srcPort"
+        northboundV2.updatePortProperties(roundTripIsl.srcSwitch.dpId, roundTripIsl.srcPort,
+                new PortPropertiesDto(discoveryEnabled: false))
+        def portDiscoveryIsEnabledOnSrcPort = false
+
+        then: "Isl is still DISCOVERED"
+        Wrappers.wait(WAIT_OFFSET) {
+            def links = northbound.getAllLinks()
+            def islInfoForward = islUtils.getIslInfo(links, roundTripIsl).get()
+            def islInfoReverse = islUtils.getIslInfo(links, roundTripIsl.reversed).get()
+            assert islInfoForward.state == IslChangeType.DISCOVERED
+            assert islInfoForward.actualState == IslChangeType.FAILED
+            assert islInfoReverse.state == IslChangeType.DISCOVERED
+            assert islInfoReverse.actualState == IslChangeType.DISCOVERED
+        }
+
+        when: "Disable portDiscovery property on the dstPort"
+        northboundV2.updatePortProperties(roundTripIsl.dstSwitch.dpId, roundTripIsl.dstPort,
+                new PortPropertiesDto(discoveryEnabled: false))
+        def portDiscoveryIsEnabledOnDstPort = false
+
+        then: "Status of the link is not changed to FAILED until discoveryTimeout is exceeded"
+        double interval = discoveryTimeout * 0.2
+        double waitTime = discoveryTimeout - interval
+        Wrappers.timedLoop(waitTime) {
+            def links = northbound.getAllLinks()
+            islUtils.getIslInfo(links, roundTripIsl).get().state == IslChangeType.DISCOVERED
+            islUtils.getIslInfo(links, roundTripIsl.reversed).get().state == IslChangeType.DISCOVERED
+            sleep((interval * 1000).toLong())
+        }
+
+        Wrappers.wait(WAIT_OFFSET + interval) {
+            def allLinks = northbound.getAllLinks()
+            def islInfoForward = islUtils.getIslInfo(allLinks, roundTripIsl).get()
+            def islInfoReverse = islUtils.getIslInfo(allLinks, roundTripIsl.reversed).get()
+            assert islInfoForward.state == IslChangeType.FAILED
+            assert islInfoForward.actualState == IslChangeType.FAILED
+            assert islInfoReverse.state == IslChangeType.FAILED
+            assert islInfoReverse.actualState == IslChangeType.FAILED
+        }
+
+        when: "Enable portDiscovery on the src/dst ports"
+        northboundV2.updatePortProperties(roundTripIsl.srcSwitch.dpId, roundTripIsl.srcPort,
+                new PortPropertiesDto(discoveryEnabled: true))
+        northboundV2.updatePortProperties(roundTripIsl.dstSwitch.dpId, roundTripIsl.dstPort,
+                new PortPropertiesDto(discoveryEnabled: true))
+        portDiscoveryIsEnabledOnSrcPort = true
+        portDiscoveryIsEnabledOnDstPort = true
+
+        then: "ISL is rediscovered"
+        Wrappers.timedLoop(waitTime) {
+            def links = northbound.getAllLinks()
+            def islInfoForward = islUtils.getIslInfo(links, roundTripIsl).get()
+            def islInfoReverse = islUtils.getIslInfo(links, roundTripIsl.reversed).get()
+            assert islInfoForward.state == IslChangeType.DISCOVERED
+            assert islInfoForward.actualState == IslChangeType.DISCOVERED
+            assert islInfoReverse.state == IslChangeType.DISCOVERED
+            assert islInfoReverse.actualState == IslChangeType.DISCOVERED
+            sleep((interval * 1000).toLong())
+        }
+
+        cleanup:
+        !portDiscoveryIsEnabledOnSrcPort && northboundV2.updatePortProperties(roundTripIsl.srcSwitch.dpId,
+                roundTripIsl.srcPort, new PortPropertiesDto(discoveryEnabled: true))
+        !portDiscoveryIsEnabledOnDstPort && northboundV2.updatePortProperties(roundTripIsl.dstSwitch.dpId,
+                roundTripIsl.dstPort, new PortPropertiesDto(discoveryEnabled: true))
+        Wrappers.wait(discoveryInterval + WAIT_OFFSET) {
+            assert islUtils.getIslInfo(roundTripIsl).get().state == IslChangeType.DISCOVERED
+            assert islUtils.getIslInfo(roundTripIsl.reversed).get().state == IslChangeType.DISCOVERED
         }
     }
 }
